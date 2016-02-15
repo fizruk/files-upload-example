@@ -1,13 +1,14 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 module Files where
 
 import Control.Monad.IO.Class
-import Control.Monad.Trans.Either
+import Control.Monad.Except
 import Control.Monad.Trans.Resource
 import Data.ByteString.Lazy (ByteString)
 import Network.Wai
@@ -43,15 +44,15 @@ data Files b
 
 type MultiPartData b = ([Param], [File (Storage b)]) 
 
-instance (KnownBackend b, HasServer api) => HasServer (Files b :> api) where
-  type ServerT (Files b :> api) m =
-    MultiPartData b -> ServerT api m
+instance (HasServer sublayout config) => HasServer (Files b :> sublayout) config where
+  type ServerT (Files b :> sublayout) m =
+    ((MultiPartData Tmp -> IO ()) -> IO ()) -> ServerT sublayout m
 
-  route Proxy subserver req respond = withBackend pb $ \b -> do
-    dat <- parseRequestBody b req
-    route (Proxy :: Proxy api) (subserver dat) req respond
+  route Proxy config subserver = WithRequest $ \request ->
+    route (Proxy :: Proxy sublayout) config (addBodyCheck subserver (bodyCheck request))
+    where
+      bodyCheck request = return $ Route (\f -> runResourceT . withInternalState $ \s -> parseRequestBody (tempFileBackEnd s) request >>= f)
 
-    where pb = Proxy :: Proxy b
 
 type FilesMem = Files Mem
 type FilesTmp = Files Tmp
@@ -66,10 +67,10 @@ api = Proxy
 server :: Server API
 server = filesHandler :<|> serveDirectory "."
 
-  where filesHandler :: MultiPartData Tmp -> EitherT ServantErr IO ()
-        filesHandler (inputs, files) = do
-          liftIO $ mapM_ ppFile files
-          liftIO $ mapM_ print inputs
+  where filesHandler :: ((MultiPartData Tmp -> IO ()) -> IO ()) -> ExceptT ServantErr IO ()
+        filesHandler multipart = liftIO $ multipart $ \(inputs, files) -> do
+          mapM_ ppFile files
+          mapM_ print inputs
 
         ppFile :: File FilePath -> IO ()
         ppFile (name, fileinfo) = do
@@ -81,4 +82,5 @@ server = filesHandler :<|> serveDirectory "."
           putStrLn $ "------------------------"
 
 app :: Application
-app = serve api server
+app = serve api EmptyConfig server
+

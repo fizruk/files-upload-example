@@ -1,0 +1,10 @@
+resolver: nightly-2016-02-10
+packages:
+- '.'
+- location: servant/servant
+  extra-dep: true
+- location: servant/servant-server
+  extra-dep: true
+extra-deps: []
+flags: {}
+extra-package-dbs: []
